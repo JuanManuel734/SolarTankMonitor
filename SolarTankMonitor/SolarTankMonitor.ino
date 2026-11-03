@@ -2,27 +2,27 @@
   =====================================================================
    Monitor del calentador solar - Firmware v2 (ESP32 DevKit v1)
   =====================================================================
-   Cambios respecto a la v1:
-   - Calibración del nivel corregida (vacío real ~3400) y guardada en
-     memoria no volátil (NVS). Se puede recalibrar desde la app.
+   - Calibración del nivel guardada en memoria no volátil (NVS).
    - Filtro de mediana para eliminar picos de ruido del ADC.
-   - Histéresis de "tanque vacío" para compensar la sonda mojada
-     (al vaciar, la sonda quedaba ~20 cuentas por debajo del vacío seco).
-   - Wi-Fi con credenciales guardadas. El portal cautivo sólo se abre si
-     no logra conectarse o si se mantiene presionado BOOT al encender.
-   - Sin página web: API JSON para la app Delphi (Windows / Android).
-   - MODO REPOSO: si nadie consulta al ESP32 durante IDLE_TIMEOUT_MS,
-     entra en reposo (CPU a 80 MHz + Wi-Fi en ahorro de energía +
-     light sleep automático si el core lo soporta). Sigue asociado a la
-     red, así que CUALQUIER PETICIÓN HTTP LO DESPIERTA.
+   - Histéresis de "tanque vacío" para compensar la sonda mojada.
+   - Wi-Fi con credenciales guardadas (portal cautivo sólo si falla o
+     si se mantiene presionado BOOT al encender).
+   - Página web en "/" que muestra los datos y la IP del ESP32.
+   - API JSON para la app Delphi (Windows / Android).
+   - MODO REPOSO SEGURO: reduce la CPU a 80 MHz, pero mantiene el
+     Wi-Fi completamente activo para que HTTP siempre pueda despertarlo.
+   - No utiliza Light Sleep ni Modem Sleep, evitando perder accesibilidad
+     desde el navegador o la app Delphi.
 
    Endpoints:
-     GET /data                    -> lecturas de sensores (despierta)
-     GET /status                  -> estado del equipo (despierta)
+     GET /                        -> página web con los datos (despierta)
+     GET /data                    -> lecturas de sensores en JSON (despierta)
+     GET /status                  -> estado del equipo en JSON (despierta)
      GET /wake?min=5              -> mantenerlo despierto N minutos
      GET /sleep                   -> dormir inmediatamente
      GET /calibrate?point=empty   -> guarda ADC actual como "vacío"
      GET /calibrate?point=full    -> guarda ADC actual como "lleno"
+     GET /calibrate?point=default -> restaura calibración por defecto
      GET /resetwifi               -> borra la red guardada y reinicia
 
    Librerías: WiFiManager (tzapu). Core ESP32 2.x o 3.x.
@@ -35,11 +35,9 @@
 #include <ESPmDNS.h>
 #include <Preferences.h>
 #include <esp_wifi.h>
-#include <esp_pm.h>
-#include <esp_arduino_version.h>
 #include <math.h>
 
-#define FW_VERSION "2.0.0"
+#define FW_VERSION "2.1.0"
 
 // =====================================================
 // PINES
@@ -51,8 +49,6 @@ const int bootButtonPin  = 0;     // Botón BOOT de la DevKit
 
 // =====================================================
 // CALIBRACION DEL NIVEL (valores por defecto)
-// Medidos en la práctica (calentador_solar.csv):
-//   vacío seco ~3400, lleno ~2376 (se usa 2449 como 100 %)
 // =====================================================
 
 const int DEFAULT_EMPTY_ADC = 3400;
@@ -61,10 +57,7 @@ const int DEFAULT_FULL_ADC  = 2449;
 int emptyAdc = DEFAULT_EMPTY_ADC;
 int fullAdc  = DEFAULT_FULL_ADC;
 
-// Histéresis para la sonda mojada:
-// - Si el tanque está "vacío", sólo sale de vacío cuando supera EXIT.
-// - Si no está vacío, entra a vacío cuando baja de ENTER.
-// En la práctica la sonda mojada marcaba ~6 % con el tanque vacío.
+// Histéresis para la sonda mojada
 const float EMPTY_ENTER_PCT = 8.0;
 const float EMPTY_EXIT_PCT  = 10.0;
 
@@ -100,7 +93,8 @@ PowerState powerState = STATE_ACTIVE;
 unsigned long lastActivityMs = 0;
 unsigned long awakeUntilMs   = 0;     // ventana forzada por /wake
 bool sleepRequested = false;          // /sleep pendiente de aplicar
-bool lightSleepSupported = false;     // se detecta al arrancar
+// El Wi-Fi permanece activo incluso durante el reposo.
+
 
 // =====================================================
 // WIFI, SERVIDOR Y MEMORIA
@@ -206,55 +200,38 @@ float readWaterTemperature() {
 // GESTIÓN DE ENERGÍA
 // =====================================================
 
-// Configura el power management de ESP-IDF.
-// Devuelve true si el core soporta light sleep automático.
-bool configurePM(int maxMhz, int minMhz, bool lightSleep) {
-#if ESP_ARDUINO_VERSION_MAJOR >= 3
-  esp_pm_config_t cfg;
-#else
-  esp_pm_config_esp32_t cfg;
-#endif
-  cfg.max_freq_mhz = maxMhz;
-  cfg.min_freq_mhz = minMhz;
-  cfg.light_sleep_enable = lightSleep;
-  return esp_pm_configure(&cfg) == ESP_OK;
-}
+// IMPORTANTE:
+// No usamos Light Sleep ni Modem Sleep. En este firmware el ESP32
+// conserva el Wi-Fi activo y únicamente reduce la frecuencia de CPU.
+// Así el servidor WebServer puede seguir atendiendo peticiones HTTP.
 
 void enterActive() {
-  if (lightSleepSupported) {
-    configurePM(240, 240, false);
-  } else {
-    setCpuFrequencyMhz(240);
-  }
-  esp_wifi_set_ps(WIFI_PS_NONE);     // radio siempre encendido: respuesta rápida
+  setCpuFrequencyMhz(240);
+
+  // Mantener la radio Wi-Fi siempre disponible.
+  esp_wifi_set_ps(WIFI_PS_NONE);
+
   powerState = STATE_ACTIVE;
-  Serial.println("[ENERGIA] ACTIVO");
+  Serial.println("[ENERGIA] ACTIVO (CPU 240 MHz, Wi-Fi siempre activo)");
 }
 
 void enterSleep() {
-  // El radio se apaga entre beacons del router (DTIM) pero el ESP32
-  // sigue asociado a la red: una petición entrante lo despierta.
-  esp_wifi_set_ps(WIFI_PS_MAX_MODEM);
+  // No apagar ni poner en ahorro agresivo la radio Wi-Fi.
+  esp_wifi_set_ps(WIFI_PS_NONE);
 
-  if (lightSleepSupported) {
-    // CPU dormida en light sleep cuando no hay tareas pendientes.
-    configurePM(80, 40, true);
-  } else {
-    // Respaldo: sólo baja la frecuencia del CPU (80 MHz es el mínimo con Wi-Fi).
-    setCpuFrequencyMhz(80);
-  }
+  // Reposo ligero: el loop y el servidor HTTP siguen funcionando.
+  setCpuFrequencyMhz(80);
 
   powerState = STATE_SLEEP;
-  Serial.println(lightSleepSupported
-                 ? "[ENERGIA] REPOSO (light sleep + modem sleep)"
-                 : "[ENERGIA] REPOSO (modem sleep + CPU 80 MHz)");
+  Serial.println("[ENERGIA] REPOSO SEGURO (CPU 80 MHz, Wi-Fi activo)");
 }
 
 // Se llama en cada petición recibida (excepto /sleep).
 void registerActivity() {
   lastActivityMs = millis();
+
   if (powerState == STATE_SLEEP) {
-    Serial.println("[ENERGIA] Peticion recibida -> despertando");
+    Serial.println("[ENERGIA] Peticion HTTP recibida -> despertando");
     enterActive();
   }
 }
@@ -263,6 +240,7 @@ unsigned long awakeRemainingSeconds() {
   unsigned long now = millis();
   unsigned long idleEnd = lastActivityMs + IDLE_TIMEOUT_MS;
   unsigned long end = (awakeUntilMs > idleEnd) ? awakeUntilMs : idleEnd;
+
   if (powerState == STATE_SLEEP || (long)(end - now) <= 0) return 0;
   return (end - now) / 1000UL;
 }
@@ -272,7 +250,142 @@ const char* stateName() {
 }
 
 // =====================================================
-// RESPUESTAS HTTP
+// PAGINA WEB
+// =====================================================
+
+const char INDEX_HTML[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Calentador solar</title>
+<style>
+  :root { --bg:#f4f6f8; --card:#fff; --txt:#1c2733; --mut:#6b7a89; --acc:#1e88e5; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#10161c; --card:#1a232c; --txt:#e8eef3; --mut:#8fa0b0; --acc:#42a5f5; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,Segoe UI,Arial,sans-serif;
+         background:var(--bg); color:var(--txt); padding:16px; }
+  h1 { font-size:1.3rem; margin:0 0 12px; }
+  .grid { display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(260px,1fr));
+          max-width:900px; margin:auto; }
+  .card { background:var(--card); border-radius:12px; padding:16px;
+          box-shadow:0 1px 4px rgba(0,0,0,.12); }
+  .card h2 { margin:0 0 8px; font-size:.85rem; color:var(--mut);
+             text-transform:uppercase; letter-spacing:.05em; }
+  .big { font-size:2.4rem; font-weight:600; }
+  .bar { height:22px; background:rgba(128,128,128,.25); border-radius:11px;
+         overflow:hidden; margin-top:10px; }
+  .fill { height:100%; width:0; background:var(--acc); transition:width .6s; }
+  table { width:100%; border-collapse:collapse; font-size:.95rem; }
+  td { padding:5px 0; } td:last-child { text-align:right; font-variant-numeric:tabular-nums; }
+  td:first-child { color:var(--mut); }
+  .ip { font-size:1.6rem; font-weight:600; color:var(--acc); }
+  .dot { display:inline-block; width:10px; height:10px; border-radius:50%;
+         background:#e53935; margin-right:6px; }
+  .dot.ok { background:#43a047; }
+  #conn { font-size:.85rem; color:var(--mut); margin-top:12px; text-align:center; }
+</style>
+</head>
+<body>
+<div class="grid">
+  <div class="card" style="grid-column:1/-1"><h1>Monitor del calentador solar</h1>
+    <div id="conn"><span class="dot" id="dot"></span><span id="connTxt">Conectando...</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Nivel de agua</h2>
+    <div class="big" id="level">--</div>
+    <div class="bar"><div class="fill" id="fill"></div></div>
+  </div>
+
+  <div class="card">
+    <h2>Temperatura</h2>
+    <div class="big" id="temp">--</div>
+  </div>
+
+  <div class="card">
+    <h2>Red</h2>
+    <div class="ip" id="ip">--</div>
+    <table>
+      <tr><td>Red Wi-Fi</td><td id="ssid">--</td></tr>
+      <tr><td>Señal</td><td id="rssi">--</td></tr>
+      <tr><td>MAC</td><td id="mac">--</td></tr>
+      <tr><td>mDNS</td><td>nivel.local</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Sensor y equipo</h2>
+    <table>
+      <tr><td>ADC</td><td id="adc">--</td></tr>
+      <tr><td>Voltaje</td><td id="volt">--</td></tr>
+      <tr><td>Nivel sin filtrar</td><td id="raw">--</td></tr>
+      <tr><td>Calibración vacío / lleno</td><td id="cal">--</td></tr>
+      <tr><td>Estado</td><td id="state">--</td></tr>
+      <tr><td>Tiempo encendido</td><td id="uptime">--</td></tr>
+      <tr><td>Firmware</td><td id="fw">--</td></tr>
+    </table>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const fmt = (v, d, u) => (v === null || v === undefined) ? '--' : v.toFixed(d) + u;
+
+function fmtUptime(s) {
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return h + ' h ' + m + ' min ' + (s % 60) + ' s';
+}
+
+async function update() {
+  try {
+    const [d, s] = await Promise.all([
+      fetch('/data').then(r => r.json()),
+      fetch('/status').then(r => r.json())
+    ]);
+
+    $('level').textContent = fmt(d.level, 1, ' %');
+    $('fill').style.width  = (d.level || 0) + '%';
+    $('temp').textContent  = fmt(d.temperatureC, 1, ' °C');
+    $('adc').textContent   = d.adc;
+    $('volt').textContent  = fmt(d.voltage, 3, ' V');
+    $('raw').textContent   = fmt(d.levelRaw, 1, ' %');
+    $('state').textContent = d.state;
+    $('uptime').textContent = fmtUptime(d.uptime);
+
+    $('ip').textContent    = s.ip;
+    $('ssid').textContent  = s.ssid;
+    $('rssi').textContent  = s.rssi + ' dBm';
+    $('mac').textContent   = s.mac;
+    $('cal').textContent   = s.emptyAdc + ' / ' + s.fullAdc;
+    $('fw').textContent    = s.fw;
+
+    $('dot').className = 'dot ok';
+    $('connTxt').textContent = 'En línea · actualizado ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    $('dot').className = 'dot';
+    $('connTxt').textContent = 'Sin conexión con el ESP32';
+  }
+}
+
+update();
+setInterval(update, 3000);
+</script>
+</body>
+</html>
+)rawliteral";
+
+void handleRoot() {
+  registerActivity();
+  server.sendHeader("Cache-Control", "no-store");
+  server.send_P(200, "text/html; charset=utf-8", INDEX_HTML);
+}
+
+// =====================================================
+// RESPUESTAS HTTP (JSON)
 // =====================================================
 
 void sendJson(int code, const String& json) {
@@ -314,7 +427,7 @@ void handleStatus() {
   String json = "{";
   json += "\"fw\":\"" FW_VERSION "\",";
   json += "\"state\":\"" + String(stateName()) + "\",";
-  json += "\"sleepMode\":\"" + String(lightSleepSupported ? "light" : "modem") + "\",";
+  json += "\"sleepMode\":\"cpu80_wifi_on\",";
   json += "\"awakeRemaining\":" + String(awakeRemainingSeconds()) + ",";
   json += "\"idleTimeout\":" + String(IDLE_TIMEOUT_MS / 1000UL) + ",";
   json += "\"ssid\":\"" + WiFi.SSID() + "\",";
@@ -459,7 +572,7 @@ void setup() {
   }
 
   // ---------------- Rutas ----------------
-  server.on("/", handleStatus);
+  server.on("/", handleRoot);          // página web
   server.on("/data", handleData);
   server.on("/status", handleStatus);
   server.on("/wake", handleWake);
@@ -470,13 +583,10 @@ void setup() {
   server.begin();
   Serial.println("API iniciada.");
 
-  // ¿El core permite light sleep automático?
-  // (sólo es posible si el core se compiló con CONFIG_PM_ENABLE y
-  //  CONFIG_FREERTOS_USE_TICKLESS_IDLE; si no, se usa modem sleep)
-  lightSleepSupported = configurePM(240, 40, true);
-  if (lightSleepSupported) configurePM(240, 240, false);
-  Serial.printf("Light sleep automatico: %s\n",
-                lightSleepSupported ? "SI" : "NO (se usara modem sleep)");
+  // Estrategia estable: Wi-Fi siempre activo; solo baja la CPU en reposo.
+  WiFi.setSleep(false);
+  esp_wifi_set_ps(WIFI_PS_NONE);
+  Serial.println("Ahorro seguro habilitado: CPU 80 MHz en reposo, Wi-Fi activo.");
 
   lastActivityMs = millis();
   enterActive();
@@ -487,6 +597,8 @@ void setup() {
 // =====================================================
 
 void loop() {
+  // Debe ejecutarse continuamente para aceptar conexiones HTTP incluso
+  // cuando el equipo está en reposo.
   server.handleClient();
 
   unsigned long now = millis();
@@ -499,11 +611,12 @@ void loop() {
       sleepRequested = false;
       enterSleep();
     }
-    delay(2);
   } else {
+    // Si llega una petición, server.handleClient() la atenderá y
+    // registerActivity() cambiará el estado a ACTIVO.
     sleepRequested = false;
-    // En reposo, delay() cede el CPU: con light sleep habilitado el chip
-    // duerme hasta el siguiente beacon o paquete entrante.
-    delay(50);
   }
+
+  // Pausa corta para no bloquear la atención de solicitudes HTTP.
+  delay(2);
 }
