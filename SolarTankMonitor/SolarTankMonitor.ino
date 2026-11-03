@@ -104,7 +104,7 @@ WebServer server(80);
 WiFiManager wm;
 Preferences prefs;
 
-const char* AP_NAME     = "ESP32-Nivel";
+const char* AP_NAME     = "SolarTank-Config";
 const char* AP_PASSWORD = "12345678";
 const char* MDNS_NAME   = "nivel";
 
