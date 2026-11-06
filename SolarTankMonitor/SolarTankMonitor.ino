@@ -7,15 +7,22 @@
    - Histéresis de "tanque vacío" para compensar la sonda mojada.
    - Wi-Fi con credenciales guardadas (portal cautivo sólo si falla o
      si se mantiene presionado BOOT al encender).
-   - Página web en "/" que muestra los datos y la IP del ESP32.
+   - Páginas web para revisar el sistema desde el navegador, con el mismo
+     diseño visual que el portal de los compañeros (archivo paginas_web.h).
    - API JSON para la app Delphi (Windows / Android).
    - MODO REPOSO SEGURO: reduce la CPU a 80 MHz, pero mantiene el
      Wi-Fi completamente activo para que HTTP siempre pueda despertarlo.
    - No utiliza Light Sleep ni Modem Sleep, evitando perder accesibilidad
      desde el navegador o la app Delphi.
 
-   Endpoints:
-     GET /                        -> página web con los datos (despierta)
+   Páginas web (todas despiertan al ESP32):
+     GET /             -> Inicio: información del ESP32 y menú
+     GET /monitor      -> Temperatura, nivel, gráfica, log y CSV
+     GET /calibracion  -> Calibración de vacío y lleno
+     GET /energia      -> Estado de reposo, despertar y dormir
+     GET /wifi         -> Estado de la red y cambio de red
+
+   Endpoints JSON:
      GET /data                    -> lecturas de sensores en JSON (despierta)
      GET /status                  -> estado del equipo en JSON (despierta)
      GET /wake?min=5              -> mantenerlo despierto N minutos
@@ -36,8 +43,9 @@
 #include <Preferences.h>
 #include <esp_wifi.h>
 #include <math.h>
+#include "paginas_web.h"
 
-#define FW_VERSION "2.1.0"
+#define FW_VERSION "2.2.0"
 
 // =====================================================
 // PINES
@@ -250,141 +258,6 @@ const char* stateName() {
 }
 
 // =====================================================
-// PAGINA WEB
-// =====================================================
-
-const char INDEX_HTML[] PROGMEM = R"rawliteral(
-<!DOCTYPE html>
-<html lang="es">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Calentador solar</title>
-<style>
-  :root { --bg:#f4f6f8; --card:#fff; --txt:#1c2733; --mut:#6b7a89; --acc:#1e88e5; }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg:#10161c; --card:#1a232c; --txt:#e8eef3; --mut:#8fa0b0; --acc:#42a5f5; }
-  }
-  * { box-sizing:border-box; }
-  body { margin:0; font-family:system-ui,Segoe UI,Arial,sans-serif;
-         background:var(--bg); color:var(--txt); padding:16px; }
-  h1 { font-size:1.3rem; margin:0 0 12px; }
-  .grid { display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(260px,1fr));
-          max-width:900px; margin:auto; }
-  .card { background:var(--card); border-radius:12px; padding:16px;
-          box-shadow:0 1px 4px rgba(0,0,0,.12); }
-  .card h2 { margin:0 0 8px; font-size:.85rem; color:var(--mut);
-             text-transform:uppercase; letter-spacing:.05em; }
-  .big { font-size:2.4rem; font-weight:600; }
-  .bar { height:22px; background:rgba(128,128,128,.25); border-radius:11px;
-         overflow:hidden; margin-top:10px; }
-  .fill { height:100%; width:0; background:var(--acc); transition:width .6s; }
-  table { width:100%; border-collapse:collapse; font-size:.95rem; }
-  td { padding:5px 0; } td:last-child { text-align:right; font-variant-numeric:tabular-nums; }
-  td:first-child { color:var(--mut); }
-  .ip { font-size:1.6rem; font-weight:600; color:var(--acc); }
-  .dot { display:inline-block; width:10px; height:10px; border-radius:50%;
-         background:#e53935; margin-right:6px; }
-  .dot.ok { background:#43a047; }
-  #conn { font-size:.85rem; color:var(--mut); margin-top:12px; text-align:center; }
-</style>
-</head>
-<body>
-<div class="grid">
-  <div class="card" style="grid-column:1/-1"><h1>Monitor del calentador solar</h1>
-    <div id="conn"><span class="dot" id="dot"></span><span id="connTxt">Conectando...</span></div>
-  </div>
-
-  <div class="card">
-    <h2>Nivel de agua</h2>
-    <div class="big" id="level">--</div>
-    <div class="bar"><div class="fill" id="fill"></div></div>
-  </div>
-
-  <div class="card">
-    <h2>Temperatura</h2>
-    <div class="big" id="temp">--</div>
-  </div>
-
-  <div class="card">
-    <h2>Red</h2>
-    <div class="ip" id="ip">--</div>
-    <table>
-      <tr><td>Red Wi-Fi</td><td id="ssid">--</td></tr>
-      <tr><td>Señal</td><td id="rssi">--</td></tr>
-      <tr><td>MAC</td><td id="mac">--</td></tr>
-      <tr><td>mDNS</td><td>nivel.local</td></tr>
-    </table>
-  </div>
-
-  <div class="card">
-    <h2>Sensor y equipo</h2>
-    <table>
-      <tr><td>ADC</td><td id="adc">--</td></tr>
-      <tr><td>Voltaje</td><td id="volt">--</td></tr>
-      <tr><td>Nivel sin filtrar</td><td id="raw">--</td></tr>
-      <tr><td>Calibración vacío / lleno</td><td id="cal">--</td></tr>
-      <tr><td>Estado</td><td id="state">--</td></tr>
-      <tr><td>Tiempo encendido</td><td id="uptime">--</td></tr>
-      <tr><td>Firmware</td><td id="fw">--</td></tr>
-    </table>
-  </div>
-</div>
-
-<script>
-const $ = id => document.getElementById(id);
-const fmt = (v, d, u) => (v === null || v === undefined) ? '--' : v.toFixed(d) + u;
-
-function fmtUptime(s) {
-  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
-  return h + ' h ' + m + ' min ' + (s % 60) + ' s';
-}
-
-async function update() {
-  try {
-    const [d, s] = await Promise.all([
-      fetch('/data').then(r => r.json()),
-      fetch('/status').then(r => r.json())
-    ]);
-
-    $('level').textContent = fmt(d.level, 1, ' %');
-    $('fill').style.width  = (d.level || 0) + '%';
-    $('temp').textContent  = fmt(d.temperatureC, 1, ' °C');
-    $('adc').textContent   = d.adc;
-    $('volt').textContent  = fmt(d.voltage, 3, ' V');
-    $('raw').textContent   = fmt(d.levelRaw, 1, ' %');
-    $('state').textContent = d.state;
-    $('uptime').textContent = fmtUptime(d.uptime);
-
-    $('ip').textContent    = s.ip;
-    $('ssid').textContent  = s.ssid;
-    $('rssi').textContent  = s.rssi + ' dBm';
-    $('mac').textContent   = s.mac;
-    $('cal').textContent   = s.emptyAdc + ' / ' + s.fullAdc;
-    $('fw').textContent    = s.fw;
-
-    $('dot').className = 'dot ok';
-    $('connTxt').textContent = 'En línea · actualizado ' + new Date().toLocaleTimeString();
-  } catch (e) {
-    $('dot').className = 'dot';
-    $('connTxt').textContent = 'Sin conexión con el ESP32';
-  }
-}
-
-update();
-setInterval(update, 3000);
-</script>
-</body>
-</html>
-)rawliteral";
-
-void handleRoot() {
-  registerActivity();
-  server.sendHeader("Cache-Control", "no-store");
-  server.send_P(200, "text/html; charset=utf-8", INDEX_HTML);
-}
-
-// =====================================================
 // RESPUESTAS HTTP (JSON)
 // =====================================================
 
@@ -433,6 +306,8 @@ void handleStatus() {
   json += "\"ssid\":\"" + WiFi.SSID() + "\",";
   json += "\"ip\":\"" + WiFi.localIP().toString() + "\",";
   json += "\"mac\":\"" + WiFi.macAddress() + "\",";
+  json += "\"gateway\":\"" + WiFi.gatewayIP().toString() + "\",";
+  json += "\"subnet\":\"" + WiFi.subnetMask().toString() + "\",";
   json += "\"rssi\":" + String(WiFi.RSSI()) + ",";
   json += "\"emptyAdc\":" + String(emptyAdc) + ",";
   json += "\"fullAdc\":" + String(fullAdc) + ",";
@@ -504,6 +379,55 @@ void handleResetWifi() {
   ESP.restart();
 }
 
+// =====================================================
+// PÁGINAS WEB (el HTML está en paginas_web.h)
+// =====================================================
+
+// Arma la página: encabezado + estilos + JS común + título + menú + contenido
+void enviarPagina(const char* titulo, const char* encabezado, const char* cuerpo) {
+  registerActivity();
+
+  String html;
+  html.reserve(strlen(WEB_CSS) + strlen(WEB_MENU) + strlen(WEB_JS_COMUN) +
+               strlen(cuerpo) + 400);
+
+  html += F("<!DOCTYPE html><html lang='es'><head><meta charset='UTF-8'>"
+            "<meta name='viewport' content='width=device-width,initial-scale=1'><title>");
+  html += titulo;
+  html += F("</title>");
+  html += WEB_CSS;
+  html += WEB_JS_COMUN;
+  html += F("</head><body><h1>");
+  html += encabezado;
+  html += F("</h1>");
+  html += WEB_MENU;
+  html += cuerpo;
+  html += F("</body></html>");
+
+  server.sendHeader("Cache-Control", "no-store");
+  server.send(200, "text/html; charset=utf-8", html);
+}
+
+void handlePaginaInicio() {
+  enviarPagina("Calentador solar", "ESP32 - Monitor del Calentador Solar", WEB_INICIO);
+}
+
+void handlePaginaMonitor() {
+  enviarPagina("Monitor", "Temperatura y Nivel de Agua", WEB_MONITOR);
+}
+
+void handlePaginaCalibracion() {
+  enviarPagina("Calibración", "Calibración de la Sonda", WEB_CALIBRACION);
+}
+
+void handlePaginaEnergia() {
+  enviarPagina("Energía", "Energía y Modo de Reposo", WEB_ENERGIA);
+}
+
+void handlePaginaWifi() {
+  enviarPagina("Configuración WiFi", "Configuración WiFi", WEB_WIFI);
+}
+
 void handleNotFound() {
   registerActivity();
   sendJson(404, "{\"ok\":false,\"error\":\"Ruta no encontrada\"}");
@@ -572,7 +496,13 @@ void setup() {
   }
 
   // ---------------- Rutas ----------------
-  server.on("/", handleRoot);          // página web
+  // Páginas web
+  server.on("/", handlePaginaInicio);
+  server.on("/monitor", handlePaginaMonitor);
+  server.on("/calibracion", handlePaginaCalibracion);
+  server.on("/energia", handlePaginaEnergia);
+  server.on("/wifi", handlePaginaWifi);
+  // API JSON (app Delphi y páginas web)
   server.on("/data", handleData);
   server.on("/status", handleStatus);
   server.on("/wake", handleWake);
@@ -581,7 +511,7 @@ void setup() {
   server.on("/resetwifi", handleResetWifi);
   server.onNotFound(handleNotFound);
   server.begin();
-  Serial.println("API iniciada.");
+  Serial.println("Servidor iniciado: abre http://" + WiFi.localIP().toString() + " o http://nivel.local");
 
   // Estrategia estable: Wi-Fi siempre activo; solo baja la CPU en reposo.
   WiFi.setSleep(false);
