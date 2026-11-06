@@ -106,7 +106,7 @@ Preferences prefs;
 
 const char* AP_NAME     = "SolarTank-Config";
 const char* AP_PASSWORD = "12345678";
-const char* MDNS_NAME   = "nivel";
+const char* MDNS_NAME   = "Calentador";
 
 bool tankEmpty = true;   // estado de la histéresis
 
