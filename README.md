@@ -5,6 +5,37 @@ Sistema de monitoreo de **temperatura y nivel de agua** para un calentador solar
 Equipo: Rodríguez Martínez Alan Mitchel · Segura Ortiz Juan Manuel · Castañón Haro Jesús Isaac
 Instituto Tecnológico de Tlajomulco, Ingeniería en Sistemas Computacionales.
 
+## Guía rápida para revisar el proyecto
+
+**Novedades de la versión 2.2.0**
+- Páginas web servidas por el ESP32, con el mismo diseño visual que el portal de los compañeros: Inicio, Monitor, Calibración, Energía y WiFi (ver [4. Páginas web](#4-páginas-web)).
+- Modo de reposo seguro: en reposo el CPU baja a 80 MHz y el Wi-Fi sigue encendido, así que el ESP32 siempre responde (ver [2. Modo de reposo](#2-modo-de-reposo)).
+- `/status` ahora incluye gateway y máscara de red.
+- Se agregó `app/AndroidManifest.template.xml`, necesario para que la app de Android se conecte al ESP32 por HTTP.
+
+**1. Descargar**
+1. En esta página, presiona el botón verde **Code → Download ZIP** y descomprime el archivo.
+2. Usa la carpeta `SolarTankMonitor/` **completa**: contiene `SolarTankMonitor.ino` y `paginas_web.h`, y los dos deben quedar juntos en la misma carpeta. Si solo se descarga el `.ino`, no compila.
+
+**2. Cargar el firmware al ESP32**
+1. En Arduino IDE 2, instala el soporte para **esp32 (Espressif Systems)** y la librería **WiFiManager (tzapu)**.
+2. Abre `SolarTankMonitor/SolarTankMonitor.ino`. Deben aparecer dos pestañas: el `.ino` y `paginas_web.h`.
+3. Elige la placa **ESP32 Dev Module** y el puerto **COMx**, y presiona **Subir**.
+4. Conéctate a la red **SolarTank-Config** (contraseña `12345678`), abre `http://192.168.4.1` y elige la red Wi-Fi.
+
+Los pasos detallados están en [5. Cargar el firmware](#5-cargar-el-firmware).
+
+**3. Revisar las páginas web**
+1. Abre el Monitor serie a 115200 baudios y copia la IP que muestra.
+2. Desde un navegador **en la misma red**, abre esa IP o `http://nivel.local`.
+3. Recorre el menú: **Inicio, Monitor, Calibración, Energía y WiFi**. Qué revisar en cada una está en [6. Prueba rápida](#6-prueba-rápida).
+
+**4. Revisar la app**
+- **Android:** instala `Monitor tanque solar.apk` (está en la raíz del repositorio), escribe la IP del ESP32 y presiona **Monitorear**.
+- **Windows:** abre `app/MonitorCalentador.dproj` en RAD Studio 13 (Community) y ejecútalo con la plataforma *Windows 32-bit*.
+
+Más detalles en [7. App](#7-app-rad-studio-multi-device-application).
+
 ## Estructura del repositorio
 
 ```
