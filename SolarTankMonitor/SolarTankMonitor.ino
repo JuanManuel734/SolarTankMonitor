@@ -271,6 +271,13 @@ String jsonFloat(float v, int decimals) {
   return isnan(v) ? String("null") : String(v, decimals);
 }
 
+// Nombre mDNS en minúsculas, por ejemplo "calentador.local"
+String mdnsHost() {
+  String h = String(MDNS_NAME);
+  h.toLowerCase();
+  return h + ".local";
+}
+
 void handleData() {
   registerActivity();
 
@@ -308,6 +315,7 @@ void handleStatus() {
   json += "\"mac\":\"" + WiFi.macAddress() + "\",";
   json += "\"gateway\":\"" + WiFi.gatewayIP().toString() + "\",";
   json += "\"subnet\":\"" + WiFi.subnetMask().toString() + "\",";
+  json += "\"mdns\":\"" + mdnsHost() + "\",";
   json += "\"rssi\":" + String(WiFi.RSSI()) + ",";
   json += "\"emptyAdc\":" + String(emptyAdc) + ",";
   json += "\"fullAdc\":" + String(fullAdc) + ",";
@@ -492,7 +500,7 @@ void setup() {
 
   if (MDNS.begin(MDNS_NAME)) {
     MDNS.addService("http", "tcp", 80);
-    Serial.println("mDNS: http://nivel.local");
+    Serial.println("mDNS: http://" + mdnsHost());
   }
 
   // ---------------- Rutas ----------------
@@ -511,7 +519,7 @@ void setup() {
   server.on("/resetwifi", handleResetWifi);
   server.onNotFound(handleNotFound);
   server.begin();
-  Serial.println("Servidor iniciado: abre http://" + WiFi.localIP().toString() + " o http://nivel.local");
+  Serial.println("Servidor iniciado: abre http://" + WiFi.localIP().toString() + " o http://" + mdnsHost());
 
   // Estrategia estable: Wi-Fi siempre activo; solo baja la CPU en reposo.
   WiFi.setSleep(false);

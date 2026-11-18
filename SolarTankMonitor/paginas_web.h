@@ -92,7 +92,7 @@ const char WEB_INICIO[] PROGMEM = R"HTML(
 <b>Red WiFi (SSID):</b> <span id='ssid'>--</span><br>
 <b>IP:</b> <span id='ip'>--</span><br>
 <b>RSSI:</b> <span id='rssi'>--</span><br>
-<b>mDNS:</b> http://nivel.local<br>
+<b>mDNS:</b> <span id='mdns'>--</span><br>
 <b>Tiempo encendido:</b> <span id='uptime'>--</span>
 </div>
 
@@ -121,7 +121,7 @@ async function cargar(){
   try{
     const s=await api('/status');
     txt('fw',s.fw);txt('fw2',s.fw);txt('mac',s.mac);txt('ssid',s.ssid);txt('ip',s.ip);
-    txt('rssi',s.rssi+' dBm');txt('uptime',duracion(s.uptime));
+    txt('rssi',s.rssi+' dBm');txt('uptime',duracion(s.uptime));txt('mdns','http://'+(s.mdns||'calentador.local'));
     const w=document.getElementById('wifi');w.className='ok';w.innerText='CONECTADO';
     document.getElementById('energia').innerHTML=estadoTexto(s.state);
     txt('modo',modoTexto(s.sleepMode));
@@ -419,7 +419,7 @@ const char WEB_WIFI[] PROGMEM = R"HTML(
 <b>Gateway:</b> <span id='gw'>--</span><br>
 <b>Máscara:</b> <span id='mask'>--</span><br>
 <b>MAC:</b> <span id='mac'>--</span><br>
-<b>mDNS:</b> http://nivel.local
+<b>mDNS:</b> <span id='mdns'>--</span>
 </div>
 
 <div class='card'>
@@ -442,7 +442,7 @@ async function cargar(){
     const s=await api('/status');
     const e=document.getElementById('estado');e.className='ok';e.innerText='Conectado';
     txt('ssid',s.ssid);txt('ip',s.ip);txt('rssi',s.rssi+' dBm');txt('senal',calidad(s.rssi));
-    txt('gw',s.gateway||'--');txt('mask',s.subnet||'--');txt('mac',s.mac);
+    txt('gw',s.gateway||'--');txt('mask',s.subnet||'--');txt('mac',s.mac);txt('mdns','http://'+(s.mdns||'calentador.local'));
   }catch(e){console.error(e);}
 }
 async function borrar(){
