@@ -12,6 +12,7 @@ Instituto Tecnológico de Tlajomulco, Ingeniería en Sistemas Computacionales.
 - Modo de reposo seguro: en reposo el CPU baja a 80 MHz y el Wi-Fi sigue encendido, así que el ESP32 siempre responde (ver [2. Modo de reposo](#2-modo-de-reposo)).
 - `/status` ahora incluye gateway, máscara de red y el nombre mDNS (`calentador.local`).
 - Logotipo de la app (una gota con sol y nivel de agua) como ícono de Android y Windows y como pantalla de carga; los archivos están en `app/iconos/`.
+- Widget de Android para la pantalla de inicio: muestra el nivel, la temperatura y la hora de la última lectura sin abrir la app (ver [Widget de Android](#widget-de-android)).
 - Se agregó `app/AndroidManifest.template.xml`, necesario para que la app de Android se conecte al ESP32 por HTTP.
 
 **1. Descargar**
@@ -32,7 +33,8 @@ Los pasos detallados están en [5. Cargar el firmware](#5-cargar-el-firmware).
 3. Recorre el menú: **Inicio, Monitor, Calibración, Energía y WiFi**. Qué revisar en cada una está en [6. Prueba rápida](#6-prueba-rápida).
 
 **4. Revisar la app**
-- **Android:** instala `Monitor tanque solar.apk` (está en la raíz del repositorio), escribe la IP del ESP32 y presiona **Monitorear**.
+- **Android:** instala `Monitor tanque solar.apk` (está en la raíz del repositorio), escribe la IP del ESP32 y presiona **Monitorear**. Después agrega el widget **Calentador solar** desde la pantalla de inicio.
+  - Si Android no deja instalarlo porque ya hay una versión anterior de la app, desinstálala primero: cada computadora firma el APK con una clave distinta.
 - **Windows:** abre `app/MonitorCalentador.dproj` en RAD Studio 13 (Community) y ejecútalo con la plataforma *Windows 32-bit*.
 
 Más detalles en [7. App](#7-app-rad-studio-multi-device-application).
@@ -47,8 +49,9 @@ app/
 ├── MonitorCalentador.dpr/.dproj  Proyecto Delphi (Multi-Device Application)
 ├── uPrincipal.pas / .fmx         Lógica e interfaz de la app
 ├── iconos/                       Logotipo (logo.svg), iconos de Android, pantallas de carga y .ico de Windows
+├── widget/                       Widget de Android: código Java, .jar compilado y recursos (res/)
 └── AndroidManifest.template.xml  Plantilla del manifiesto (permite HTTP en red local)
-Monitor tanque solar.apk         App compilada para Android
+Monitor tanque solar.apk         App compilada para Android (incluye el widget)
 ```
 
 ## Conexiones
@@ -189,3 +192,30 @@ Se abren desde un navegador **en la misma red** que el ESP32, en `http://<IP del
   - En Xiaomi/Redmi hay que activar "Instalar vía USB" y aceptar el aviso a tiempo.
   - También se puede instalar a mano el APK de `app\MonitorCalentador\bin\MonitorCalentador.apk` (o el `Monitor tanque solar.apk` de la raíz del repositorio).
 - `calentador.local` (mDNS) no funciona en todos los teléfonos. Usa la IP.
+
+### Widget de Android
+
+Además de la app, hay un widget para la pantalla de inicio (**Calentador solar**, tamaño 4×1). Muestra el nivel del tanque, la temperatura y la hora de la última lectura sin abrir la app.
+
+- **Agregarlo:** mantén presionado un espacio vacío de la pantalla de inicio, entra a **Widgets** y arrastra **Calentador solar**.
+- **Primer uso:** abre la app, escribe la IP del ESP32 y presiona **Monitorear**. La app le pasa la IP al widget. Mientras no la tenga, el widget dice "Abre la app y escribe la IP del ESP32".
+- **Cuándo se actualiza:**
+  - Cada vez que la app recibe una lectura.
+  - Al tocar el botón **↻** del widget. El widget consulta `/data` directamente al ESP32, sin abrir la app.
+  - Solo, cada 30 minutos (es el mínimo que permite Android).
+- Si el ESP32 no responde, el widget muestra "Sin conexión con el ESP32" junto con la hora de la última lectura. Al tocar el widget se abre la app.
+
+**Cómo está hecho.** Delphi FMX no puede crear widgets por sí solo, porque Android exige una clase Java (`AppWidgetProvider`). Por eso el widget está en Java y se enlaza a la app de Delphi:
+
+- `app/widget/src/com/ittj/monitorcalentador/widget/NivelWidget.java`: código del widget. Consulta `/data` en un hilo aparte y dibuja el diseño con `RemoteViews`.
+- `app/widget/monitorcalentador-widget.jar`: ese código ya compilado. Está agregado al proyecto en *Project Manager > Target Platforms > Android 64-bit > Libraries*.
+- `app/widget/res/`: diseño (`layout/widget_nivel.xml`), fondo (`drawable/widget_fondo.xml`) y configuración (`xml/widget_nivel_info.xml`). Se despliegan en *Project > Deployment* con clase **File** hacia `res\layout\`, `res\drawable\` y `res\xml\`.
+- `app/AndroidManifest.template.xml` registra el widget como `<receiver>`.
+- En `uPrincipal.pas`, el método `ActualizarWidget` guarda la IP y la última lectura en `SharedPreferences` (`monitor_calentador_widget`) y avisa al widget para que se redibuje. En Windows no hace nada.
+
+Para recompilar el `.jar` después de cambiar el `.java` (desde `app/widget`, con el `android.jar` de la API 35 del SDK de Android):
+
+```
+javac --release 8 -cp "<SDK>\platforms\android-35\android.jar" -d build src\com\ittj\monitorcalentador\widget\NivelWidget.java
+jar cf monitorcalentador-widget.jar -C build .
+```

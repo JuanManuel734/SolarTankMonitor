@@ -21,7 +21,9 @@ uses
   System.Net.HttpClient, System.Net.URLClient,
   FMX.Types, FMX.Controls, FMX.Forms, FMX.Graphics, FMX.Dialogs,
   FMX.DialogService, FMX.StdCtrls, FMX.Objects, FMX.Layouts, FMX.Edit,
-  FMX.ListBox, FMX.Controls.Presentation, FMX.Platform;
+  FMX.ListBox, FMX.Controls.Presentation, FMX.Platform
+  {$IFDEF ANDROID}, Androidapi.Helpers, Androidapi.JNI.GraphicsContentViewText,
+  Androidapi.JNI.JavaTypes{$ENDIF};
 
 type
   TLectura = record
@@ -135,6 +137,7 @@ type
     procedure ConsultarStatus;
     procedure Calibrar(const Punto, Descripcion: string);
     procedure Aviso(const Msg: string);
+    procedure ActualizarWidget(const L: TLectura; HayLectura: Boolean);
     function EventoApp(AAppEvent: TApplicationEvent;
       AContext: TObject): Boolean;
   end;
@@ -338,6 +341,8 @@ begin
   except
     // no es crítico
   end;
+  // El widget de Android necesita la IP para consultar al ESP32
+  ActualizarWidget(Default(TLectura), False);
 end;
 
 function TfrmPrincipal.UrlBase: string;
@@ -600,6 +605,7 @@ begin
   MostrarNivel(L);
   AgregarHistorial(L);
   pbxGrafica.Repaint;
+  ActualizarWidget(L, True);
 end;
 
 procedure TfrmPrincipal.MostrarTemperatura(const L: TLectura);
@@ -899,6 +905,54 @@ begin
   finally
     SL.Free;
   end;
+end;
+
+{ ---------- widget de Android ---------- }
+
+// Guarda la IP (y la última lectura, si la hay) en SharedPreferences para que
+// el widget de la pantalla de inicio (NivelWidget.java) pueda mostrarla, y le
+// avisa que hay datos nuevos. En Windows no hace nada.
+procedure TfrmPrincipal.ActualizarWidget(const L: TLectura; HayLectura: Boolean);
+{$IFDEF ANDROID}
+const
+  CLASE_WIDGET = 'com.ittj.monitorcalentador.widget.NivelWidget';
+  ACCION_DATOS = 'com.ittj.monitorcalentador.widget.DATOS';
+var
+  Prefs: JSharedPreferences;
+  Ed: JSharedPreferences_Editor;
+  Intent: JIntent;
+{$ENDIF}
+begin
+{$IFDEF ANDROID}
+  try
+    Prefs := TAndroidHelper.Context.getSharedPreferences(
+      StringToJString('monitor_calentador_widget'), TJContext.JavaClass.MODE_PRIVATE);
+    Ed := Prefs.edit;
+    Ed.putString(StringToJString('host'), StringToJString(Trim(edtHost.Text)));
+    if HayLectura then
+    begin
+      Ed.putFloat(StringToJString('nivel'), L.Nivel);
+      Ed.putBoolean(StringToJString('tempOk'), L.TempValida);
+      if L.TempValida then
+        Ed.putFloat(StringToJString('temp'), L.Temp);
+      Ed.putString(StringToJString('estado'), StringToJString(L.Estado));
+      Ed.putString(StringToJString('hora'), StringToJString(FormatDateTime('hh:nn', L.Hora)));
+      Ed.putBoolean(StringToJString('hayDatos'), True);
+      Ed.remove(StringToJString('error'));
+    end;
+    Ed.apply;
+
+    if HayLectura then
+    begin
+      Intent := TJIntent.Create;
+      Intent.setClassName(TAndroidHelper.Context, StringToJString(CLASE_WIDGET));
+      Intent.setAction(StringToJString(ACCION_DATOS));
+      TAndroidHelper.Context.sendBroadcast(Intent);
+    end;
+  except
+    // El widget es opcional: si algo falla, la app sigue funcionando.
+  end;
+{$ENDIF}
 end;
 
 procedure TfrmPrincipal.Aviso(const Msg: string);

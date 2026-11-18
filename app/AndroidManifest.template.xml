@@ -73,6 +73,18 @@
             </intent-filter>
         </activity>
 <%activity%>
+        <!-- Widget de pantalla de inicio (app/widget) -->
+        <receiver
+            android:name="com.ittj.monitorcalentador.widget.NivelWidget"
+            android:exported="true"
+            android:label="Calentador solar" >
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_nivel_info" />
+        </receiver>
 <%receivers%>
     </application>
 </manifest>
