@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <clipPath id="dropB"><path d="M256 70 C256 70 380 214 380 300 A124 124 0 0 1 132 300 C132 214 256 70 256 70 Z"/></clipPath>
+    <linearGradient id="waterB" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#42A5F5"/><stop offset="1" stop-color="#1565C0"/></linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="#FFFFFF"/>
+  <rect x="8" y="8" width="496" height="496" rx="106" fill="none" stroke="#E3ECF8" stroke-width="16"/>
+  <g clip-path="url(#dropB)">
+    <rect x="120" y="60" width="272" height="380" fill="#FFF3E0"/>
+    <!-- sol dentro de la gota -->
+    <circle cx="256" cy="232" r="46" fill="#FF9800"/>
+    <g stroke="#FFB300" stroke-width="12" stroke-linecap="round">
+      <line x1="256" y1="160" x2="256" y2="172"/><line x1="200" y1="182" x2="209" y2="191"/><line x1="312" y1="182" x2="303" y2="191"/>
+      <line x1="182" y1="236" x2="194" y2="236"/><line x1="330" y1="236" x2="318" y2="236"/>
+    </g>
+    <!-- agua -->
+    <path d="M110 300 Q170 278 230 300 T350 300 T470 300 V440 H110 Z" fill="url(#waterB)"/>
+    <path d="M110 318 Q170 300 230 318 T350 318 T470 318" fill="none" stroke="#BBDEFB" stroke-width="6" opacity=".7"/>
+  </g>
+  <path d="M256 70 C256 70 380 214 380 300 A124 124 0 0 1 132 300 C132 214 256 70 256 70 Z" fill="none" stroke="#1A56B8" stroke-width="14" stroke-linejoin="round"/>
+</svg>
