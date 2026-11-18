@@ -10,7 +10,8 @@ Instituto Tecnológico de Tlajomulco, Ingeniería en Sistemas Computacionales.
 **Novedades de la versión 2.2.0**
 - Páginas web servidas por el ESP32, con el mismo diseño visual que el portal de los compañeros: Inicio, Monitor, Calibración, Energía y WiFi (ver [4. Páginas web](#4-páginas-web)).
 - Modo de reposo seguro: en reposo el CPU baja a 80 MHz y el Wi-Fi sigue encendido, así que el ESP32 siempre responde (ver [2. Modo de reposo](#2-modo-de-reposo)).
-- `/status` ahora incluye gateway y máscara de red.
+- `/status` ahora incluye gateway, máscara de red y el nombre mDNS (`calentador.local`).
+- Logotipo de la app (una gota con sol y nivel de agua) como ícono de Android y Windows y como pantalla de carga; los archivos están en `app/iconos/`.
 - Se agregó `app/AndroidManifest.template.xml`, necesario para que la app de Android se conecte al ESP32 por HTTP.
 
 **1. Descargar**
@@ -27,7 +28,7 @@ Los pasos detallados están en [5. Cargar el firmware](#5-cargar-el-firmware).
 
 **3. Revisar las páginas web**
 1. Abre el Monitor serie a 115200 baudios y copia la IP que muestra.
-2. Desde un navegador **en la misma red**, abre esa IP o `http://nivel.local`.
+2. Desde un navegador **en la misma red**, abre esa IP o `http://calentador.local`.
 3. Recorre el menú: **Inicio, Monitor, Calibración, Energía y WiFi**. Qué revisar en cada una está en [6. Prueba rápida](#6-prueba-rápida).
 
 **4. Revisar la app**
@@ -45,6 +46,7 @@ SolarTankMonitor/
 app/
 ├── MonitorCalentador.dpr/.dproj  Proyecto Delphi (Multi-Device Application)
 ├── uPrincipal.pas / .fmx         Lógica e interfaz de la app
+├── iconos/                       Logotipo (logo.svg), iconos de Android, pantallas de carga y .ico de Windows
 └── AndroidManifest.template.xml  Plantilla del manifiesto (permite HTTP en red local)
 Monitor tanque solar.apk         App compilada para Android
 ```
@@ -100,7 +102,7 @@ En *deep sleep* el radio Wi-Fi se apaga, así que el ESP32 ya no podría recibir
 | Ruta | Función |
 |---|---|
 | `/data` | Lecturas: `adc`, `voltage`, `level`, `levelRaw`, `temperatureC`, `state`, `awakeRemaining`, `uptime` |
-| `/status` | Firmware, estado, modo de reposo (`sleepMode`), SSID, IP, MAC, gateway, máscara, RSSI, calibración, `uptime` |
+| `/status` | Firmware, estado, modo de reposo (`sleepMode`), SSID, IP, MAC, gateway, máscara, nombre mDNS (`mdns`), RSSI, calibración, `uptime` |
 | `/wake?min=5` | Despierta y mantiene activo N minutos (máximo 60) |
 | `/sleep` | Reposo inmediato |
 | `/calibrate?point=empty\|full\|default` | Guarda el ADC actual como vacío o lleno, o restaura los valores por defecto (3400 / 2449). Se guarda en NVS. |
@@ -110,7 +112,7 @@ La app de Delphi y las páginas web usan **la misma API**.
 
 ## 4. Páginas web
 
-Se abren desde un navegador **en la misma red** que el ESP32, en `http://<IP del ESP32>` o `http://nivel.local`. Tienen el mismo diseño visual que el portal de los compañeros del docente: fondo gris, tarjetas blancas, botones azules `#1976D2`, verdes para calibrar, rojos para acciones peligrosas y barra de menú.
+Se abren desde un navegador **en la misma red** que el ESP32, en `http://<IP del ESP32>` o `http://calentador.local`. Tienen el mismo diseño visual que el portal de los compañeros del docente: fondo gris, tarjetas blancas, botones azules `#1976D2`, verdes para calibrar, rojos para acciones peligrosas y barra de menú.
 
 | Página | Contenido |
 |---|---|
@@ -149,7 +151,7 @@ Se abren desde un navegador **en la misma red** que el ESP32, en `http://<IP del
 1. Abre el Monitor serie a **115200 baudios**.
 2. Conéctate a la red **SolarTank-Config** (contraseña `12345678`).
 3. Abre `http://192.168.4.1` y elige tu red.
-4. El Monitor serie muestra `Servidor iniciado: abre http://<IP> o http://nivel.local`. Conviene reservar esa IP en el router.
+4. El Monitor serie muestra `Servidor iniciado: abre http://<IP> o http://calentador.local`. Conviene reservar esa IP en el router.
 
 **Cambiar de red:** mantén presionado **BOOT** al encender, o usa el botón de la página `/wifi`.
 
@@ -186,4 +188,4 @@ Se abren desde un navegador **en la misma red** que el ESP32, en `http://<IP del
 - **Instalar en el celular:** selecciona *Android 64-bit* y el dispositivo, y presiona **Ctrl+Shift+F9**.
   - En Xiaomi/Redmi hay que activar "Instalar vía USB" y aceptar el aviso a tiempo.
   - También se puede instalar a mano el APK de `app\MonitorCalentador\bin\MonitorCalentador.apk` (o el `Monitor tanque solar.apk` de la raíz del repositorio).
-- `nivel.local` (mDNS) no funciona en todos los teléfonos. Usa la IP.
+- `calentador.local` (mDNS) no funciona en todos los teléfonos. Usa la IP.
