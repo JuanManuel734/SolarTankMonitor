@@ -10,8 +10,9 @@
    - Páginas web para revisar el sistema desde el navegador, con el mismo
      diseño visual que el portal de los compañeros (archivo paginas_web.h).
    - API JSON para la app Delphi (Windows / Android).
-   - MODO REPOSO SEGURO: reduce la CPU a 80 MHz, pero mantiene el
-     Wi-Fi completamente activo para que HTTP siempre pueda despertarlo.
+   - MODO REPOSO SEGURO: la CPU trabaja fija a 80 MHz desde el arranque
+     y en reposo sólo deja de leer los sensores; el Wi-Fi sigue
+     completamente activo para que HTTP siempre pueda despertarlo.
    - No utiliza Light Sleep ni Modem Sleep, evitando perder accesibilidad
      desde el navegador o la app Delphi.
 
@@ -33,6 +34,21 @@
      GET /resetwifi               -> borra la red guardada y reinicia
 
    Librerías: WiFiManager (tzapu). Core ESP32 2.x o 3.x.
+
+   Cambios de la v2.2.1 respecto a la v2.2.0:
+     - Reposo: el ESP32 dejaba de responder a la app y a la web al entrar
+       en reposo. La causa era cambiar la CPU de 240 a 80 MHz con
+       setCpuFrequencyMhz() con el Wi-Fi encendido. Ahora la CPU se fija a
+       80 MHz en setup() antes del Wi-Fi y no se vuelve a cambiar.
+     - Sensor de temperatura desconectado: el ADC con atenuación de 11 dB
+       se satura cerca de 3.1 V, así que el límite de 3.29 V nunca se
+       alcanzaba y se mostraba una temperatura falsa (~ -26 °C). Ahora se
+       descarta a partir de 3.0 V o si la temperatura es menor a -10 °C.
+     - Reposo automático: después de ~24.8 días encendido (millis() > 2^31)
+       el ESP32 dejaba de dormirse solo. La ventana de /wake ahora usa una
+       bandera y comparaciones seguras ante el desbordamiento de millis().
+     - El SSID se escapa al armar el JSON de /status (comillas o "\" en el
+       nombre de la red ya no rompen el JSON).
   =====================================================================
 */
 
@@ -45,7 +61,7 @@
 #include <math.h>
 #include "paginas_web.h"
 
-#define FW_VERSION "2.2.0"
+#define FW_VERSION "2.2.1"
 
 // =====================================================
 // PINES
@@ -88,6 +104,14 @@ const float TEMP_NOMINAL_KELVIN     = 298.15;
 const float TEMP_BETA               = 3950.0;
 const int   TEMP_SAMPLES            = 15;
 
+// Detección de sensor desconectado o en corto.
+// Con ADC_11db el ESP32 se satura alrededor de 3.1 V, por eso el límite
+// superior es 3.0 V (NTC abierta) y no 3.3 V.
+const float TEMP_SHORT_VOLTAGE = 0.05;   // NTC en corto
+const float TEMP_OPEN_VOLTAGE  = 3.00;   // NTC desconectada
+const float TEMP_MIN_VALID_C   = -10.0;  // el agua del calentador no baja de aquí
+const float TEMP_MAX_VALID_C   = 120.0;
+
 // =====================================================
 // REPOSO
 // =====================================================
@@ -99,7 +123,8 @@ enum PowerState { STATE_ACTIVE, STATE_SLEEP };
 
 PowerState powerState = STATE_ACTIVE;
 unsigned long lastActivityMs = 0;
-unsigned long awakeUntilMs   = 0;     // ventana forzada por /wake
+unsigned long awakeUntilMs   = 0;     // fin de la ventana forzada por /wake
+bool wakeWindowActive = false;        // true mientras la ventana de /wake está vigente
 bool sleepRequested = false;          // /sleep pendiente de aplicar
 // El Wi-Fi permanece activo incluso durante el reposo.
 
@@ -190,9 +215,9 @@ float readWaterTemperature() {
 
   float voltage = mv[TEMP_SAMPLES / 2] / 1000.0;
 
-  if (voltage <= 0.01 || voltage >= 3.29) return NAN;
+  if (voltage <= TEMP_SHORT_VOLTAGE || voltage >= TEMP_OPEN_VOLTAGE) return NAN;
 
-  float resistance = TEMP_FIXED_RESISTOR * voltage / (3.3 - voltage);
+  float resistance = TEMP_FIXED_RESISTOR * voltage / (ADC_MAX_VOLTAGE - voltage);
   if (resistance <= 0) return NAN;
 
   float inverseKelvin =
@@ -201,7 +226,9 @@ float readWaterTemperature() {
 
   if (inverseKelvin <= 0) return NAN;
 
-  return (1.0 / inverseKelvin) - 273.15;
+  float celsius = (1.0 / inverseKelvin) - 273.15;
+  if (celsius < TEMP_MIN_VALID_C || celsius > TEMP_MAX_VALID_C) return NAN;
+  return celsius;
 }
 
 // =====================================================
@@ -209,29 +236,33 @@ float readWaterTemperature() {
 // =====================================================
 
 // IMPORTANTE:
-// No usamos Light Sleep ni Modem Sleep. En este firmware el ESP32
-// conserva el Wi-Fi activo y únicamente reduce la frecuencia de CPU.
-// Así el servidor WebServer puede seguir atendiendo peticiones HTTP.
+// No usamos Light Sleep ni Modem Sleep, y tampoco cambiamos la frecuencia
+// de la CPU con el Wi-Fi encendido: setCpuFrequencyMhz() cambia el reloj
+// "a mano" (este core no tiene activado el administrador de energía de
+// ESP-IDF, CONFIG_PM_ENABLE) y el Wi-Fi no se entera del cambio. En la
+// v2.2.0 eso dejaba al ESP32 sin responder después de entrar en reposo.
+//
+// Por eso la CPU se fija UNA sola vez en setup(), antes de iniciar el
+// Wi-Fi, y el reposo sólo deja de leer los sensores.
+
+const uint32_t CPU_FREQ_MHZ = 80;   // 80, 160 o 240 (80 = menor consumo)
 
 void enterActive() {
-  setCpuFrequencyMhz(240);
-
   // Mantener la radio Wi-Fi siempre disponible.
   esp_wifi_set_ps(WIFI_PS_NONE);
 
   powerState = STATE_ACTIVE;
-  Serial.println("[ENERGIA] ACTIVO (CPU 240 MHz, Wi-Fi siempre activo)");
+  Serial.println("[ENERGIA] ACTIVO (lee sensores, Wi-Fi siempre activo)");
 }
 
 void enterSleep() {
-  // No apagar ni poner en ahorro agresivo la radio Wi-Fi.
+  // No apagar ni poner en ahorro la radio Wi-Fi.
   esp_wifi_set_ps(WIFI_PS_NONE);
 
-  // Reposo ligero: el loop y el servidor HTTP siguen funcionando.
-  setCpuFrequencyMhz(80);
-
+  // Reposo: el loop y el servidor HTTP siguen funcionando igual;
+  // simplemente no se leen los sensores hasta la siguiente petición.
   powerState = STATE_SLEEP;
-  Serial.println("[ENERGIA] REPOSO SEGURO (CPU 80 MHz, Wi-Fi activo)");
+  Serial.println("[ENERGIA] REPOSO (sin lecturas, Wi-Fi activo)");
 }
 
 // Se llama en cada petición recibida (excepto /sleep).
@@ -244,13 +275,30 @@ void registerActivity() {
   }
 }
 
-unsigned long awakeRemainingSeconds() {
-  unsigned long now = millis();
-  unsigned long idleEnd = lastActivityMs + IDLE_TIMEOUT_MS;
-  unsigned long end = (awakeUntilMs > idleEnd) ? awakeUntilMs : idleEnd;
+// ¿Sigue vigente la ventana de /wake? Las restas de unsigned long son
+// seguras aunque millis() se desborde (cada ~49.7 días).
+bool wakeWindowOpen(unsigned long now) {
+  if (!wakeWindowActive) return false;
+  if ((long)(awakeUntilMs - now) <= 0) {
+    wakeWindowActive = false;
+    return false;
+  }
+  return true;
+}
 
-  if (powerState == STATE_SLEEP || (long)(end - now) <= 0) return 0;
-  return (end - now) / 1000UL;
+unsigned long awakeRemainingSeconds() {
+  if (powerState == STATE_SLEEP) return 0;
+
+  unsigned long now = millis();
+  unsigned long idleElapsed = now - lastActivityMs;
+  unsigned long remaining =
+      (idleElapsed < IDLE_TIMEOUT_MS) ? IDLE_TIMEOUT_MS - idleElapsed : 0;
+
+  if (wakeWindowOpen(now)) {
+    unsigned long wakeRemaining = awakeUntilMs - now;
+    if (wakeRemaining > remaining) remaining = wakeRemaining;
+  }
+  return remaining / 1000UL;
 }
 
 const char* stateName() {
@@ -269,6 +317,23 @@ void sendJson(int code, const String& json) {
 
 String jsonFloat(float v, int decimals) {
   return isnan(v) ? String("null") : String(v, decimals);
+}
+
+// Escapa un texto para meterlo entre comillas en un JSON
+String jsonEscape(const String& s) {
+  String out;
+  out.reserve(s.length() + 8);
+  for (size_t i = 0; i < s.length(); i++) {
+    char c = s[i];
+    if (c == '"' || c == '\\') { out += '\\'; out += c; }
+    else if ((unsigned char)c < 0x20) {
+      char buf[7];
+      snprintf(buf, sizeof(buf), "\\u%04x", (unsigned char)c);
+      out += buf;
+    }
+    else out += c;
+  }
+  return out;
 }
 
 // Nombre mDNS en minúsculas, por ejemplo "calentador.local"
@@ -307,10 +372,11 @@ void handleStatus() {
   String json = "{";
   json += "\"fw\":\"" FW_VERSION "\",";
   json += "\"state\":\"" + String(stateName()) + "\",";
-  json += "\"sleepMode\":\"cpu80_wifi_on\",";
+  json += "\"sleepMode\":\"cpu_fija_wifi_on\",";
+  json += "\"cpuMhz\":" + String(getCpuFrequencyMhz()) + ",";
   json += "\"awakeRemaining\":" + String(awakeRemainingSeconds()) + ",";
   json += "\"idleTimeout\":" + String(IDLE_TIMEOUT_MS / 1000UL) + ",";
-  json += "\"ssid\":\"" + WiFi.SSID() + "\",";
+  json += "\"ssid\":\"" + jsonEscape(WiFi.SSID()) + "\",";
   json += "\"ip\":\"" + WiFi.localIP().toString() + "\",";
   json += "\"mac\":\"" + WiFi.macAddress() + "\",";
   json += "\"gateway\":\"" + WiFi.gatewayIP().toString() + "\",";
@@ -334,13 +400,14 @@ void handleWake() {
   if (minutes > (long)MAX_WAKE_MINUTES) minutes = MAX_WAKE_MINUTES;
 
   awakeUntilMs = millis() + (unsigned long)minutes * 60000UL;
+  wakeWindowActive = true;
 
   sendJson(200, "{\"ok\":true,\"state\":\"activo\",\"awakeMinutes\":" +
                 String(minutes) + "}");
 }
 
 void handleSleep() {
-  awakeUntilMs = 0;
+  wakeWindowActive = false;
   sleepRequested = true;   // se aplica en loop(), después de responder
   sendJson(200, "{\"ok\":true,\"state\":\"reposo\"}");
 }
@@ -446,6 +513,10 @@ void handleNotFound() {
 // =====================================================
 
 void setup() {
+  // La frecuencia de la CPU se fija aquí, ANTES de iniciar el Wi-Fi,
+  // y ya no se cambia (ver GESTIÓN DE ENERGÍA).
+  setCpuFrequencyMhz(CPU_FREQ_MHZ);
+
   Serial.begin(115200);
   delay(300);
 
@@ -524,7 +595,8 @@ void setup() {
   // Estrategia estable: Wi-Fi siempre activo; solo baja la CPU en reposo.
   WiFi.setSleep(false);
   esp_wifi_set_ps(WIFI_PS_NONE);
-  Serial.println("Ahorro seguro habilitado: CPU 80 MHz en reposo, Wi-Fi activo.");
+  Serial.printf("Ahorro seguro: CPU fija a %u MHz, Wi-Fi siempre activo.\n",
+                (unsigned)getCpuFrequencyMhz());
 
   lastActivityMs = millis();
   enterActive();
@@ -543,7 +615,7 @@ void loop() {
 
   if (powerState == STATE_ACTIVE) {
     bool idle = (now - lastActivityMs) > IDLE_TIMEOUT_MS;
-    bool windowOver = (long)(now - awakeUntilMs) >= 0;
+    bool windowOver = !wakeWindowOpen(now);
 
     if (sleepRequested || (idle && windowOver)) {
       sleepRequested = false;

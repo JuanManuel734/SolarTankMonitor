@@ -73,6 +73,7 @@ async function api(url){
 function txt(id,v){const e=document.getElementById(id);if(e)e.innerText=v;}
 function duracion(s){s=Math.max(0,Math.round(s));const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;return (h?h+' h ':'')+(h||m?m+' min ':'')+x+' s';}
 function modoTexto(m){
+  if(m==='cpu_fija_wifi_on')return 'CPU fija a 80 MHz, Wi-Fi siempre activo';
   if(m==='cpu80_wifi_on')return 'CPU a 80 MHz, Wi-Fi siempre activo';
   if(m==='light')return 'Light sleep + Wi-Fi en ahorro';
   if(m==='modem')return 'Modem sleep + CPU a 80 MHz';
@@ -365,7 +366,7 @@ const char WEB_ENERGIA[] PROGMEM = R"HTML(
 
 <div class='card'>
 <h2>¿Cómo funciona?</h2>
-<p>Si nadie consulta al ESP32 durante el tiempo indicado, entra en <b>reposo</b>: baja la frecuencia del procesador de 240 MHz a 80 MHz y deja de leer los sensores.
+<p>Si nadie consulta al ESP32 durante el tiempo indicado, entra en <b>reposo</b> y deja de leer los sensores. El procesador trabaja siempre a 80 MHz para gastar menos energía.
 El Wi-Fi se mantiene encendido en todo momento, de modo que el ESP32 siempre puede responder.
 <b>Cualquier petición</b> (esta página, la app o el JSON) lo regresa de inmediato al modo activo.</p>
 </div>
